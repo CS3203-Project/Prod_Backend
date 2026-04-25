@@ -32,7 +32,7 @@ import authMiddleware from '../middlewares/auth.middleware.js';
 const router: import('express').Router = Router();
 
 // Apply authentication middleware to all routes
-// router.use(authMiddleware);
+router.use(authMiddleware);
 
 /**
  * @route   POST /api/services

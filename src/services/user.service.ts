@@ -123,52 +123,43 @@ export const getProfile = async (userId: string) => {
   
   if (!user) throw new Error('User not found');
   
-  // Fetch service provider data separately to avoid heavy joins
+  // Only fetch service provider data if user is a provider
   let serviceProvider = null;
   if (user.role === 'PROVIDER' || user.role === 'ADMIN') {
     serviceProvider = await prisma.serviceProvider.findUnique({
       where: { userId },
-      select: {
-        id: true,
-        bio: true,
-        skills: true,
-        qualifications: true,
-        logoUrl: true,
-        averageRating: true,
-        totalReviews: true,
+      include: {
+        services: {
+          where: { isActive: true },
+          select: { id: true }
+        },
+        reviewsReceived: {
+          select: {
+            id: true,
+            rating: true,
+            comment: true,
+            createdAt: true,
+            reviewer: {
+              select: {
+                firstName: true,
+                lastName: true,
+                imageUrl: true
+              }
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 5
+        }
       },
     });
     
-    // Get services count
+    // Transform the data
     if (serviceProvider) {
-      const servicesCount = await prisma.service.count({
-        where: { providerId: serviceProvider.id, isActive: true }
-      });
-      
-      // Get latest 5 reviews
-      const recentReviews = await prisma.customerReview.findMany({
-        where: { revieweeId: serviceProvider.id },
-        select: {
-          id: true,
-          rating: true,
-          comment: true,
-          createdAt: true,
-          reviewer: {
-            select: {
-              firstName: true,
-              lastName: true,
-              imageUrl: true
-            }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 5
-      });
-      
+      const { services, reviewsReceived, ...providerData } = serviceProvider as any;
       serviceProvider = {
-        ...serviceProvider,
-        servicesCount,
-        recentReviews
+        ...providerData,
+        servicesCount: services?.length || 0,
+        recentReviews: reviewsReceived || []
       };
     }
   }

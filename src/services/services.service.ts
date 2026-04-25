@@ -52,9 +52,6 @@ interface LocationSearchOptions {
  */
 export const createService = async (serviceData: ServiceCreateData) => {
   try {
-    console.log('=== SERVICE SERVICE DEBUG ===');
-    console.log('Service data received in service layer:', JSON.stringify(serviceData, null, 2));
-    
     const {
       providerId,
       categoryId,
@@ -67,11 +64,6 @@ export const createService = async (serviceData: ServiceCreateData) => {
       isActive = true,
       workingTime = []
     } = serviceData;
-
-    // Debug: Extract videoUrl specifically
-    const videoUrl = serviceData.videoUrl;
-    console.log('Extracted videoUrl:', videoUrl);
-    console.log('VideoUrl type:', typeof videoUrl);
 
     // Validate required fields
     if (!providerId) {
@@ -125,9 +117,6 @@ export const createService = async (serviceData: ServiceCreateData) => {
       locationLastUpdated: serviceData.locationLastUpdated ?? null
     };
 
-    console.log('Data being sent to Prisma create:', JSON.stringify(createData, null, 2));
-    console.log('VideoUrl in create data:', createData.videoUrl);
-
     // Create the service first
     const newService = await prisma.service.create({
       data: createData,
@@ -147,13 +136,8 @@ export const createService = async (serviceData: ServiceCreateData) => {
       }
     });
 
-    console.log('Service created by Prisma. Checking result...');
-    console.log('Service ID:', newService.id);
-    console.log('Service videoUrl field:', (newService as any).videoUrl);
-
     // Generate and update embeddings for the newly created service
     try {
-      console.log('Generating embeddings for service:', newService.id);
       const embeddings = await embeddingService.generateServiceEmbeddings({
         title: newService.title ?? "",
         description: newService.description ?? "",
@@ -174,14 +158,11 @@ export const createService = async (serviceData: ServiceCreateData) => {
 
       console.log('✅ Embeddings generated and stored for service:', newService.id);
     } catch (embeddingError) {
-      console.warn('⚠️ Failed to generate embeddings for service:', newService.id, embeddingError);
       // Don't fail the service creation if embedding generation fails
     }
 
     return newService;
   } catch (error) {
-    console.error('=== SERVICE SERVICE ERROR ===');
-    console.error('Error in createService:', error);
     const errorMessage = typeof error === 'object' && error !== null && 'message' in error
       ? (error as { message: string }).message
       : String(error);
