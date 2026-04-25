@@ -1,8 +1,6 @@
 import Stripe from 'stripe';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../utils/database.js';
 import stripeService from './stripe.service.js';
-
-const prisma = new PrismaClient();
 
 class PayoutService {
   private stripe: Stripe;

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import paymentController from '../controllers/payment.controller.js';
 import authMiddleware from '../middlewares/auth.middleware.js';
 
@@ -77,6 +77,7 @@ router.get(
  */
 router.post(
   '/webhook',
+  express.raw({ type: 'application/json' }),
   paymentController.handleWebhook
 );
 

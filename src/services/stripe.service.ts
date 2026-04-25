@@ -1,10 +1,9 @@
 import Stripe from 'stripe';
-import { PrismaClient, PaymentStatus } from '@prisma/client';
+import { PaymentStatus } from '@prisma/client';
 import { config } from 'dotenv';
+import { prisma } from '../utils/database.js';
 
 config();
-
-const prisma = new PrismaClient();
 
 class StripeService {
   private stripe: Stripe;
@@ -135,6 +134,40 @@ class StripeService {
       console.error('Error confirming payment:', error);
       throw new Error('Failed to confirm payment');
     }
+  }
+
+  async markPaymentAsFailed(paymentIntentId: string) {
+    const payment = await prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+    });
+
+    if (!payment) {
+      throw new Error('Payment not found');
+    }
+
+    return prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: PaymentStatus.FAILED,
+      },
+    });
+  }
+
+  async markPaymentAsCanceled(paymentIntentId: string) {
+    const payment = await prisma.payment.findUnique({
+      where: { stripePaymentIntentId: paymentIntentId },
+    });
+
+    if (!payment) {
+      throw new Error('Payment not found');
+    }
+
+    return prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: PaymentStatus.CANCELED,
+      },
+    });
   }
 
   /**

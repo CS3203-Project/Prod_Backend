@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
 import { queueService } from './queue.service.js';
-
-const prisma = new PrismaClient();
+import { prisma } from '../utils/database.js';
 
 export class BookingReminderService {
 

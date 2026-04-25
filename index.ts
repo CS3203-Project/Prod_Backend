@@ -45,6 +45,7 @@ import { scheduledJobsService } from './src/services/scheduled-jobs.service.js';
 import express, { type Application } from 'express';
 import cors, { type CorsOptions } from 'cors';
 import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import userRoutes from './src/routes/user.route.js';
@@ -87,53 +88,95 @@ const io = new SocketIOServer(server, {
 
 // Get the messaging namespace
 const messagingIo = io.of('/messaging');
+const jwtSecret = process.env.JWT_SECRET;
+
+function getBearerToken(headerValue?: string | string[]): string | null {
+  if (!headerValue) return null;
+  const header = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  if (!header?.startsWith('Bearer ')) return null;
+  return header.slice(7);
+}
+
+messagingIo.use((socket, next) => {
+  try {
+    if (!jwtSecret) {
+      return next(new Error('Socket auth unavailable'));
+    }
+
+    const authToken = typeof socket.handshake.auth?.token === 'string'
+      ? socket.handshake.auth.token
+      : null;
+    const headerToken = getBearerToken(socket.handshake.headers.authorization);
+    const token = authToken || headerToken;
+
+    if (!token) {
+      return next(new Error('Unauthorized: token missing'));
+    }
+
+    const decoded = jwt.verify(token, jwtSecret) as jwt.JwtPayload & { id?: string };
+    if (!decoded?.id) {
+      return next(new Error('Unauthorized: invalid token payload'));
+    }
+
+    socket.data.userId = decoded.id;
+    return next();
+  } catch (error) {
+    return next(new Error('Unauthorized: token invalid'));
+  }
+});
 
 // Socket.IO connection handling for messaging namespace
 const connectedUsers = new Map<string, string>(); // userId -> socketId
 const activeConversations = new Map<string, string>(); // userId -> conversationId
 
 messagingIo.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  const socketUserId = socket.data.userId as string;
+  connectedUsers.set(socketUserId, socket.id);
+  console.log(`Client connected: ${socket.id} (user ${socketUserId})`);
+  messagingIo.emit('user:online', { userId: socketUserId, status: 'online' });
 
   // Handle user join
-  socket.on('user:join', (data: { userId: string }) => {
-    const { userId } = data;
-    connectedUsers.set(userId, socket.id);
-    console.log(`User ${userId} joined with socket ${socket.id}`);
-    
-    // Broadcast to all connected clients that a user came online
-    messagingIo.emit('user:online', { userId, status: 'online' });
-    
-    socket.emit('user:joined', { success: true, userId });
+  socket.on('user:join', () => {
+    socket.emit('user:joined', { success: true, userId: socketUserId });
   });
 
   // Handle conversation enter
-  socket.on('conversation:enter', (data: { userId: string; conversationId: string }) => {
-    const { userId, conversationId } = data;
-    activeConversations.set(userId, conversationId);
-    console.log(`User ${userId} entered conversation ${conversationId}`);
+  socket.on('conversation:enter', async (data: { conversationId: string }) => {
+    const { conversationId } = data;
+    const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+    if (!conversation || !conversation.userIds.includes(socketUserId)) {
+      socket.emit('message:error', { error: 'Not authorized for this conversation' });
+      return;
+    }
+    activeConversations.set(socketUserId, conversationId);
+    console.log(`User ${socketUserId} entered conversation ${conversationId}`);
     
     socket.emit('conversation:entered', { success: true, conversationId });
   });
 
   // Handle conversation leave
-  socket.on('conversation:leave', (data: { userId: string }) => {
-    const { userId } = data;
-    const conversationId = activeConversations.get(userId);
-    activeConversations.delete(userId);
-    console.log(`User ${userId} left conversation ${conversationId}`);
+  socket.on('conversation:leave', () => {
+    const conversationId = activeConversations.get(socketUserId);
+    activeConversations.delete(socketUserId);
+    console.log(`User ${socketUserId} left conversation ${conversationId}`);
     
     socket.emit('conversation:left', { success: true });
   });
 
   // Handle message send
-  socket.on('message:send', async (data: any) => {
+  socket.on('message:send', async (data: { content: string; toId: string; conversationId: string }) => {
     try {
+      const conversation = await prisma.conversation.findUnique({ where: { id: data.conversationId } });
+      if (!conversation || !conversation.userIds.includes(socketUserId) || !conversation.userIds.includes(data.toId)) {
+        socket.emit('message:error', { error: 'Not authorized for this conversation' });
+        return;
+      }
+
       // Create message in database
       const message = await prisma.message.create({
         data: {
           content: data.content,
-          fromId: data.fromId,
+          fromId: socketUserId,
           toId: data.toId,
           conversationId: data.conversationId,
         },
@@ -189,9 +232,14 @@ messagingIo.on('connection', (socket) => {
   });
 
   // Handle mark message as read
-  socket.on('message:mark-read', async (data: { messageId: string; userId: string }) => {
+  socket.on('message:mark-read', async (data: { messageId: string }) => {
     try {
-      const { messageId, userId } = data;
+      const { messageId } = data;
+      const message = await prisma.message.findUnique({ where: { id: messageId } });
+      if (!message || message.toId !== socketUserId) {
+        socket.emit('message:error', { error: 'Not authorized to mark this message as read' });
+        return;
+      }
       
       const updatedMessage = await prisma.message.update({
         where: { id: messageId },
@@ -203,7 +251,7 @@ messagingIo.on('connection', (socket) => {
       if (senderSocketId) {
         messagingIo.to(senderSocketId).emit('message:read-receipt', {
           messageId,
-          readBy: userId,
+          readBy: socketUserId,
           readAt: updatedMessage.receivedAt
         });
       }
@@ -216,14 +264,19 @@ messagingIo.on('connection', (socket) => {
   });
 
   // Handle mark conversation as read
-  socket.on('conversation:mark-read', async (data: { conversationId: string; userId: string }) => {
+  socket.on('conversation:mark-read', async (data: { conversationId: string }) => {
     try {
-      const { conversationId, userId } = data;
+      const { conversationId } = data;
+      const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+      if (!conversation || !conversation.userIds.includes(socketUserId)) {
+        socket.emit('message:error', { error: 'Not authorized for this conversation' });
+        return;
+      }
       
       await prisma.message.updateMany({
         where: {
           conversationId,
-          toId: userId,
+          toId: socketUserId,
           receivedAt: null,
         },
         data: { receivedAt: new Date() },
@@ -248,19 +301,10 @@ messagingIo.on('connection', (socket) => {
   // Handle disconnection
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
-    
-    // Remove user from connected users map and active conversations
-    for (const [userId, socketId] of connectedUsers.entries()) {
-      if (socketId === socket.id) {
-        connectedUsers.delete(userId);
-        activeConversations.delete(userId);
-        console.log(`User ${userId} disconnected`);
-        
-        // Broadcast to all connected clients that a user went offline
-        messagingIo.emit('user:offline', { userId, status: 'offline' });
-        break;
-      }
-    }
+    connectedUsers.delete(socketUserId);
+    activeConversations.delete(socketUserId);
+    console.log(`User ${socketUserId} disconnected`);
+    messagingIo.emit('user:offline', { userId: socketUserId, status: 'offline' });
   });
 });
 
@@ -303,6 +347,9 @@ const limiter = rateLimit({
 
 // Apply rate limiting to all routes
 app.use(limiter);
+
+// Stripe webhook must receive the raw body for signature verification.
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 
 // Increase JSON payload limit for file uploads
 app.use(express.json({ limit: '10mb' }));

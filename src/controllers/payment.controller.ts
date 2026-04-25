@@ -1,8 +1,6 @@
 import { Request, Response } from 'express';
 import stripeService from '../services/stripe.service.js';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../utils/database.js';
 
 export class PaymentController {
   /**
@@ -346,7 +344,7 @@ export class PaymentController {
   async handleWebhook(req: Request, res: Response) {
     try {
       const signature = req.headers['stripe-signature'] as string;
-      const payload = req.body;
+      const payload = req.body as Buffer;
 
       if (!signature) {
         return res.status(400).json({
@@ -400,7 +398,7 @@ export class PaymentController {
    */
   private async handlePaymentFailed(paymentIntent: any) {
     try {
-      await stripeService.confirmPayment(paymentIntent.id);
+      await stripeService.markPaymentAsFailed(paymentIntent.id);
       console.log(`Payment failed: ${paymentIntent.id}`);
     } catch (error) {
       console.error('Error handling payment failed:', error);
@@ -412,7 +410,7 @@ export class PaymentController {
    */
   private async handlePaymentCanceled(paymentIntent: any) {
     try {
-      await stripeService.confirmPayment(paymentIntent.id);
+      await stripeService.markPaymentAsCanceled(paymentIntent.id);
       console.log(`Payment canceled: ${paymentIntent.id}`);
     } catch (error) {
       console.error('Error handling payment canceled:', error);
