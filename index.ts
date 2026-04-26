@@ -60,7 +60,7 @@ import serviceReviewRoutes from './src/routes/serviceReview.route.js';
 import serviceRequestRoutes from './src/routes/serviceRequest.route.js';
 import paymentRoutes from './src/routes/payment.route.js';
 import notificationRoutes from './src/routes/notification.route.js';
-import { chatbotRoutes, CHATBOT_MODULE_INFO } from './src/modules/chatbot/index.js';
+
 import scheduleRoutes from './src/routes/schedule.route.js';
 
 // Simple database test function
@@ -352,6 +352,7 @@ app.use(limiter);
 app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 
 // Increase JSON payload limit for file uploads
+app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/api/users', userRoutes);
@@ -366,7 +367,7 @@ app.use('/api/service-reviews', serviceReviewRoutes);
 app.use('/api/service-requests', serviceRequestRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/chatbot', chatbotRoutes);
+
 app.use('/api/schedule', scheduleRoutes);
 
 const PORT: number = parseInt(process.env.PORT || '3000', 10);

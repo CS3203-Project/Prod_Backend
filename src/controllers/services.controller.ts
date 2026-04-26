@@ -247,17 +247,28 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
       includeWithoutLocation = true
     } = req.query;
 
+    const parseNumber = (value: unknown): number | undefined => {
+      if (value === undefined || value === null || value === '') return undefined;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+
     // Determine user coordinates
     let userLat: number | undefined, userLng: number | undefined;
     let locationProvided = false;
 
-    if (lat && lng) {
-      userLat = parseFloat(lat as string);
-      userLng = parseFloat(lng as string);
+    const parsedLat = parseNumber(lat);
+    const parsedLng = parseNumber(lng);
+    const parsedLatitude = parseNumber(latitude);
+    const parsedLongitude = parseNumber(longitude);
+
+    if (parsedLat !== undefined && parsedLng !== undefined) {
+      userLat = parsedLat;
+      userLng = parsedLng;
       locationProvided = true;
-    } else if (latitude && longitude) {
-      userLat = parseFloat(latitude as string);
-      userLng = parseFloat(longitude as string);
+    } else if (parsedLatitude !== undefined && parsedLongitude !== undefined) {
+      userLat = parsedLatitude;
+      userLng = parsedLongitude;
       locationProvided = true;
     } else if (address) {
       try {
@@ -275,9 +286,11 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
     let searchType = '';
     let hasServicesWithinRadius: boolean | undefined;
     let searchMessage: string | undefined;
+    const radiusValue = parseNumber(radius) ?? 50;
+    const includeServicesWithoutLocation = includeWithoutLocation === 'true' || includeWithoutLocation === true;
 
     // Case 1: Both query and location provided - Semantic search with optional location filtering
-    if (query && typeof query === 'string' && query.trim() && locationProvided && userLat && userLng) {
+    if (query && typeof query === 'string' && query.trim() && locationProvided && userLat !== undefined && userLng !== undefined) {
       console.log('Hybrid search: semantic + location');
       searchType = 'hybrid';
 
@@ -298,25 +311,29 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
       const semanticResults = await semanticSearchService.searchServices(semanticSearchOptions);
 
       let locationFilteredResults: any[] = [];
-      let hasServicesWithinRadius = false;
+      let hasWithinRadius = false;
       let message: string | undefined;
 
-      // Filter by location and add distance
-      for (const service of semanticResults) {
-        // Get full service data with location
-        const fullService = await serviceService.getServiceById(service.id);
+      const fullServices = await Promise.all(
+        semanticResults.map((service) => serviceService.getServiceById(service.id))
+      );
 
-        if (fullService && fullService.latitude && fullService.longitude) {
+      // Filter by location and add distance
+      for (let i = 0; i < semanticResults.length; i++) {
+        const service = semanticResults[i];
+        const fullService = fullServices[i];
+
+        if (fullService && fullService.latitude !== null && fullService.longitude !== null && fullService.latitude !== undefined && fullService.longitude !== undefined) {
           // Calculate distance
           const distance = googleMapsService.calculateDistance(
-            userLat!,
-            userLng!,
+            userLat,
+            userLng,
             fullService.latitude,
             fullService.longitude
           );
 
           // Check if within radius (only if radius > 0)
-          if (parseFloat(radius as string) <= 0 || distance <= parseFloat(radius as string)) {
+          if (radiusValue <= 0 || distance <= radiusValue) {
             locationFilteredResults.push({
               ...service,
               latitude: fullService.latitude,
@@ -327,13 +344,13 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
               country: fullService.country,
               postalCode: fullService.postalCode,
               serviceRadiusKm: fullService.serviceRadiusKm,
-              distance_km: parseFloat(radius as string) > 0 ? distance : null // Only show distance if radius filtering active
+              distance_km: radiusValue > 0 ? distance : null // Only show distance if radius filtering active
             });
-            if (parseFloat(radius as string) > 0 && distance <= parseFloat(radius as string)) {
-              hasServicesWithinRadius = true;
+            if (radiusValue > 0 && distance <= radiusValue) {
+              hasWithinRadius = true;
             }
           }
-        } else if (includeWithoutLocation === 'true' || includeWithoutLocation === true) {
+        } else if (includeServicesWithoutLocation) {
           // Include services without location (available everywhere)
           locationFilteredResults.push({
             ...service,
@@ -343,19 +360,20 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
       }
 
       // If no services within radius, include ALL semantic results (not just location-less ones)
-      if (!hasServicesWithinRadius) {
+      if (!hasWithinRadius) {
         console.log('No services found within radius, including all matching services');
         locationFilteredResults = [];
 
-        for (const service of semanticResults) {
-          const fullService = await serviceService.getServiceById(service.id);
+        for (let i = 0; i < semanticResults.length; i++) {
+          const service = semanticResults[i];
+          const fullService = fullServices[i];
 
           if (fullService) {
-            if (fullService.latitude && fullService.longitude) {
+            if (fullService.latitude !== null && fullService.longitude !== null && fullService.latitude !== undefined && fullService.longitude !== undefined) {
               // Calculate distance even though outside radius
               const distance = googleMapsService.calculateDistance(
-                userLat!,
-                userLng!,
+                userLat,
+                userLng,
                 fullService.latitude,
                 fullService.longitude
               );
@@ -382,7 +400,7 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
           }
         }
 
-        message = parseFloat(radius as string) > 0 ? `No services found within ${radius}km radius. Showing all matching services.` : `Showing all matching services (no radius limit).`;
+        message = radiusValue > 0 ? `No services found within ${radiusValue}km radius. Showing all matching services.` : `Showing all matching services (no radius limit).`;
       }
 
       // Sort by similarity first, then by distance
@@ -402,7 +420,7 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
 
 
       // Store additional response data for later use
-      hasServicesWithinRadius = hasServicesWithinRadius;
+      hasServicesWithinRadius = hasWithinRadius;
       searchMessage = message;
     }
     
@@ -428,14 +446,14 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
     }
     
     // Case 3: Only location provided - Location-based search
-    else if (locationProvided && userLat && userLng) {
+    else if (locationProvided && userLat !== undefined && userLng !== undefined) {
       console.log('Location search only');
       searchType = 'location';
       
       const locationSearchOptions: any = {
         latitude: userLat,
         longitude: userLng,
-        radius: parseFloat(radius as string),
+        radius: radiusValue,
         page: 1,
         limit: parseInt(limit as string),
         categoryId: categoryId as string
@@ -469,7 +487,7 @@ export const hybridSearchServices = async (req: Request, res: Response, next: Ne
 
     const responseData: any = {
       query: query || null,
-      location: locationProvided ? { latitude: userLat, longitude: userLng, radius } : null,
+      location: locationProvided ? { latitude: userLat, longitude: userLng, radius: radiusValue } : null,
       searchType,
       results: results,
       count: results.length

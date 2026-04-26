@@ -1,14 +1,22 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import multer from 'multer';
 import { Request } from 'express';
+import fs from 'fs';
+import path from 'path';
 
-// Configure AWS S3 Client
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
+// Define the root uploads directory
+const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+// Ensure subdirectories exist
+['profile-images', 'uploads', 'service-videos'].forEach(folder => {
+  const folderPath = path.join(UPLOADS_DIR, folder);
+  if (!fs.existsSync(folderPath)) {
+    fs.mkdirSync(folderPath, { recursive: true });
+  }
 });
 
 // Configure multer for memory storage
@@ -29,32 +37,32 @@ export const upload = multer({
   },
 });
 
-// Upload file to S3
+// Upload file to Local Storage
 export const uploadToS3 = async (
   file: Express.Multer.File,
   folder: string = 'profile-images'
 ): Promise<string> => {
-  // Sanitize filename by removing spaces and special characters
+  // Sanitize filename
   const sanitizedFilename = file.originalname
-    .replace(/\s+/g, '_') // Replace spaces with underscores
-    .replace(/[^a-zA-Z0-9._-]/g, '') // Remove special characters except dots, underscores, and hyphens
-    .replace(/_+/g, '_'); // Replace multiple underscores with single underscore
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '')
+    .replace(/_+/g, '_');
+  const filename = `${Date.now()}-${Math.random().toString(36).substring(2)}-${sanitizedFilename}`;
   
-  const key = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2)}-${sanitizedFilename}`;
+  // Ensure the specific folder exists
+  const targetFolder = path.join(UPLOADS_DIR, folder);
+  if (!fs.existsSync(targetFolder)) {
+    fs.mkdirSync(targetFolder, { recursive: true });
+  }
 
-  const params = {
-    Bucket: process.env.AWS_S3_BUCKET_NAME!,
-    Key: key,
-    Body: file.buffer,
-    ContentType: file.mimetype,
-  };
+  const filePath = path.join(targetFolder, filename);
 
   try {
-    const command = new PutObjectCommand(params);
-    await s3Client.send(command);
-    return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    await fs.promises.writeFile(filePath, file.buffer);
+    // Return relative URL path
+    return `/uploads/${folder}/${filename}`;
   } catch (error) {
-    console.error('Error uploading to S3:', error);
+    console.error('Error uploading file locally:', error);
     throw new Error('Failed to upload image');
   }
 };
@@ -75,52 +83,46 @@ export const uploadVideo = multer({
   },
 });
 
-// Upload video to S3
+// Upload video to Local Storage
 export const uploadVideoToS3 = async (
   file: Express.Multer.File,
   folder: string = 'service-videos'
 ): Promise<string> => {
-  // Sanitize filename by removing spaces and special characters
   const sanitizedFilename = file.originalname
-    .replace(/\s+/g, '_') // Replace spaces with underscores
-    .replace(/[^a-zA-Z0-9._-]/g, '') // Remove special characters except dots, underscores, and hyphens
-    .replace(/_+/g, '_'); // Replace multiple underscores with single underscore
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '')
+    .replace(/_+/g, '_');
+  const filename = `${Date.now()}-${Math.random().toString(36).substring(2)}-${sanitizedFilename}`;
   
-  const key = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2)}-${sanitizedFilename}`;
+  const targetFolder = path.join(UPLOADS_DIR, folder);
+  if (!fs.existsSync(targetFolder)) {
+    fs.mkdirSync(targetFolder, { recursive: true });
+  }
 
-  const params = {
-    Bucket: process.env.AWS_S3_BUCKET_NAME!,
-    Key: key,
-    Body: file.buffer,
-    ContentType: file.mimetype,
-  };
+  const filePath = path.join(targetFolder, filename);
 
   try {
-    const command = new PutObjectCommand(params);
-    await s3Client.send(command);
-    return `https://${process.env.AWS_S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    await fs.promises.writeFile(filePath, file.buffer);
+    return `/uploads/${folder}/${filename}`;
   } catch (error) {
-    console.error('Error uploading video to S3:', error);
+    console.error('Error uploading video locally:', error);
     throw new Error('Failed to upload video');
   }
 };
 
-// Delete file from S3
-export const deleteFromS3 = async (imageUrl: string): Promise<void> => {
+// Delete file from Local Storage
+export const deleteFromS3 = async (fileUrl: string): Promise<void> => {
   try {
-    // Extract key from URL
-    const url = new URL(imageUrl);
-    const key = url.pathname.substring(1); // Remove leading slash
+    if (!fileUrl.startsWith('/uploads/')) return;
+    
+    // Convert /uploads/folder/filename.ext to absolute path
+    const relativePath = fileUrl.replace('/uploads/', '');
+    const filePath = path.join(UPLOADS_DIR, relativePath);
 
-    const params = {
-      Bucket: process.env.AWS_S3_BUCKET_NAME!,
-      Key: key,
-    };
-
-    const command = new DeleteObjectCommand(params);
-    await s3Client.send(command);
+    if (fs.existsSync(filePath)) {
+      await fs.promises.unlink(filePath);
+    }
   } catch (error) {
-    console.error('Error deleting from S3:', error);
-    // Don't throw error for delete failures to avoid breaking the update operation
+    console.error('Error deleting local file:', error);
   }
 };

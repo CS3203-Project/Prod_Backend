@@ -14,13 +14,15 @@ services:
       - postgres
       - rabbitmq
     restart: unless-stopped
+    volumes:
+      - backend_uploads:/app/uploads
 
   postgres:
     image: postgres:16-alpine
     container_name: zia-backend-db
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: zia_backend
     ports:
       - "5432:5432"
@@ -41,3 +43,4 @@ services:
 volumes:
   backend_pg_data:
   backend_rabbitmq_data:
+  backend_uploads:
